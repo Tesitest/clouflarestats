@@ -1,0 +1,50 @@
+{
+  "fetched_at": "2026-09-10T09:36:33+00:00",
+  "note": "Each series is normalized independently by the API. Values from different series are not comparable.",
+  "series": {
+    "archive_month": {
+      "aggInterval": "ONE_DAY",
+      "confidenceInfo": {
+        "annotations": [],
+        "level": null
+      },
+      "dateRange": [
+        {
+          "endTime": "2026-08-31T00:00:00Z",
+          "startTime": "2026-08-01T00:00:00Z"
+        }
+      ],
+      "end": "2026-08-31",
+      "normalization": "MIN0_MAX",
+      "start": "2026-08-01",
+      "units": [
+        {
+          "name": "*",
+          "value": "requests"
+        }
+      ]
+    },
+    "rolling_window": {
+      "aggInterval": "ONE_WEEK",
+      "confidenceInfo": {
+        "annotations": [],
+        "level": null
+      },
+      "dateRange": [
+        {
+          "endTime": "2026-08-31T00:00:00Z",
+          "startTime": "2026-02-23T00:00:00Z"
+        }
+      ],
+      "end": "2026-08-31",
+      "normalization": "MIN0_MAX",
+      "start": "2026-03-01",
+      "units": [
+        {
+          "name": "*",
+          "value": "requests"
+        }
+      ]
+    }
+  }
+}
