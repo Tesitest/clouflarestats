@@ -1,6 +1,6 @@
 Key highlights — Cloudflare Radar AI bot traffic, worldwide
 Window: 2026-03-01 to 2026-08-31 (1d, MIN0_MAX normalized, single request)
-Generated: 2026-09-10T10:07:13+00:00
+Generated: 2026-09-10T10:18:26+00:00
 
 1. August 2026 averaged 0.809 — up 9.6% on July 2026 (0.738).
 2. That is the busiest of the 6 months shown, and +31.0% against March 2026, the start of the window.
