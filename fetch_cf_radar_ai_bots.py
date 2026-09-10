@@ -18,32 +18,38 @@ def previous_month(today):
     last_day = today.replace(day=1) - timedelta(days=1)
     return last_day.replace(day=1), last_day
 
+def shift_months(first_of_month, delta):
+    """Move a first-of-month date by `delta` whole months."""
+    total = first_of_month.year * 12 + (first_of_month.month - 1) + delta
+    return date(total // 12, total % 12 + 1, 1)
+
 def parse_date(value):
     try:
         return date.fromisoformat(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
 
-default_start, default_end = previous_month(date.today())
-
 parser = argparse.ArgumentParser(
     description="Fetch Cloudflare Radar worldwide AI-bot daily timeseries as CSV. "
-    "With no arguments it fetches the calendar month that just ended, which is "
-    "what the monthly GitHub Actions run does.",
+    "With no arguments it writes two files: an immutable archive CSV for the "
+    "calendar month that just ended, and a rolling window CSV covering the last "
+    "N months, overwritten each run. That is what the monthly GitHub Actions run does.",
 )
-parser.add_argument("--start", type=parse_date, default=default_start,
-                    help=f"first day to fetch, YYYY-MM-DD (default: {default_start})")
-parser.add_argument("--end", type=parse_date, default=default_end,
-                    help=f"last day to fetch, YYYY-MM-DD (default: {default_end})")
+parser.add_argument("--start", type=parse_date,
+                    help="first day to fetch, YYYY-MM-DD; use with --end for a one-off "
+                         "backfill, which writes only a dated archive file")
+parser.add_argument("--end", type=parse_date,
+                    help="last day to fetch, YYYY-MM-DD")
+parser.add_argument("--rolling-months", type=int, default=6, metavar="N",
+                    help="how many trailing months the rolling file covers (default: 6)")
 parser.add_argument("--out-dir", default=".",
-                    help="directory to write the CSV into (default: the current directory)")
+                    help="directory to write the CSVs into (default: the current directory)")
 args = parser.parse_args()
 
-START_DATE = args.start
-END_DATE = args.end
-
-if START_DATE > END_DATE:
-    sys.exit(f"--start ({START_DATE}) is after --end ({END_DATE})")
+if bool(args.start) != bool(args.end):
+    sys.exit("--start and --end must be given together.")
+if args.rolling_months < 1:
+    sys.exit(f"--rolling-months must be at least 1, got {args.rolling_months}")
 
 def month_chunks(start_date, end_date):
     current = start_date
@@ -93,41 +99,73 @@ def fetch_chunk(chunk_start, chunk_end):
 
     return rows[0], rows[1:]
 
-all_rows = []
-header = None
+def write_csv(filename, header, rows):
+    # Fail loudly rather than committing an empty file: an empty result means the
+    # API answered but had nothing for us, which is never the expected outcome.
+    if not rows:
+        sys.exit(f"No rows to write for {filename}; refusing to write an empty CSV.")
 
-for chunk_start, chunk_end in month_chunks(START_DATE, END_DATE):
+    os.makedirs(args.out_dir, exist_ok=True)
+    path = os.path.join(args.out_dir, filename)
+
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+    print(f"Saved: {path}  ({len(rows)} rows excluding header)")
+    return path
+
+def dated_name(start_date, end_date):
+    return (
+        f"cloudflare_radar_ai_bots_worldwide_daily_"
+        f"{start_date.isoformat()}_to_{end_date.isoformat()}.csv"
+    )
+
+if args.start:
+    if args.start > args.end:
+        sys.exit(f"--start ({args.start}) is after --end ({args.end})")
+    window_start, window_end = args.start, args.end
+else:
+    # The rolling window ends with the month that just closed, so the archive
+    # month is always the window's final chunk — fetch once, write twice.
+    archive_start, window_end = previous_month(date.today())
+    window_start = shift_months(archive_start, -(args.rolling_months - 1))
+
+header = None
+chunks = []
+
+for chunk_start, chunk_end in month_chunks(window_start, window_end):
     print(f"Fetching {chunk_start} to {chunk_end}...")
     chunk_header, chunk_rows = fetch_chunk(chunk_start, chunk_end)
 
     if header is None:
         header = chunk_header
 
-    all_rows.extend(chunk_rows)
-
-# Fail loudly rather than committing an empty file: an empty result means the
-# API answered but had nothing for us, which is never the expected outcome.
-if not all_rows:
-    sys.exit(f"No rows returned for {START_DATE} to {END_DATE}; refusing to write an empty CSV.")
-
-filename = (
-    f"cloudflare_radar_ai_bots_worldwide_daily_"
-    f"{START_DATE.isoformat()}_to_{END_DATE.isoformat()}.csv"
-)
-os.makedirs(args.out_dir, exist_ok=True)
-output_file = os.path.join(args.out_dir, filename)
-
-with open(output_file, "w", encoding="utf-8", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow(header)
-    writer.writerows(all_rows)
+    chunks.append((chunk_start, chunk_end, chunk_rows))
 
 print()
-print(f"Saved: {output_file}")
-print(f"Rows excluding header: {len(all_rows)}")
+
+if args.start:
+    all_rows = [row for _, _, rows in chunks for row in rows]
+    written = [write_csv(dated_name(window_start, window_end), header, all_rows)]
+else:
+    archive_start, archive_end, archive_rows = chunks[-1]
+    all_rows = [row for _, _, rows in chunks for row in rows]
+    written = [
+        write_csv(dated_name(archive_start, archive_end), header, archive_rows),
+        write_csv(
+            f"cloudflare_radar_ai_bots_worldwide_daily_last_{args.rolling_months}_months.csv",
+            header,
+            all_rows,
+        ),
+    ]
+
+print()
+print(f"Window covered: {window_start} to {window_end}")
 print()
 
-with open(output_file, "r", encoding="utf-8") as f:
+with open(written[-1], "r", encoding="utf-8") as f:
     for i, line in enumerate(f):
         if i >= 10:
             break

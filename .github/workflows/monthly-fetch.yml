@@ -13,6 +13,10 @@ on:
       end:
         description: "Last day to fetch (YYYY-MM-DD). Leave blank for last month."
         required: false
+      rolling_months:
+        description: "Months the rolling file covers. Ignored when start/end are set."
+        required: false
+        default: "6"
 
 permissions:
   contents: write
@@ -37,14 +41,15 @@ jobs:
           # Via env, not inline ${{ }}, so the inputs can't be read as shell.
           START: ${{ inputs.start }}
           END: ${{ inputs.end }}
+          ROLLING_MONTHS: ${{ inputs.rolling_months || '6' }}
         run: |
           if [ -n "$START" ] && [ -n "$END" ]; then
             python fetch_cf_radar_ai_bots.py --start "$START" --end "$END"
           else
-            python fetch_cf_radar_ai_bots.py
+            python fetch_cf_radar_ai_bots.py --rolling-months "$ROLLING_MONTHS"
           fi
 
-      - name: Commit the CSV
+      - name: Commit the CSVs
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -52,6 +57,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No new or changed CSV; nothing to commit."
           else
-            git commit -m "Add Cloudflare Radar AI-bot data for the past month"
+            git commit -m "Update Cloudflare Radar AI-bot data (monthly archive + rolling window)"
             git push
           fi
