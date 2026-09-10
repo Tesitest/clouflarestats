@@ -53,7 +53,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add '*.csv' radar_meta.json
+          # -A rather than a pathspec: a backfill run does not write every
+          # generated file, and naming a missing path makes git add fail.
+          git add -A
           if git diff --staged --quiet; then
             echo "No new or changed CSV; nothing to commit."
           else

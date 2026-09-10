@@ -182,6 +182,97 @@ def write_csv(filename, header, rows):
     print(f"Saved: {path}  ({len(rows)} rows excluding header)")
     return path
 
+MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
+               "August", "September", "October", "November", "December"]
+
+def day_label(day):
+    # strftime's day-of-month directive is not portable across platforms.
+    return f"{day.day} {MONTH_NAMES[day.month - 1][:3]} {day.year}"
+
+def build_highlights(rows):
+    """Three plain-text findings, derived from the data rather than written.
+
+    Comparing months to each other is only legitimate because the whole window
+    came back in one response and shares one normalization maximum. If this
+    ever goes back to per-request months, these sentences become fiction.
+    """
+    points = [(date.fromisoformat(ts[:10]), float(value)) for ts, value in rows]
+
+    months = []
+    for day, value in points:
+        key = (day.year, day.month)
+        if not months or months[-1][0] != key:
+            months.append((key, []))
+        months[-1][1].append(value)
+    months = [(key, values, sum(values) / len(values)) for key, values in months]
+
+    def name_of(key):
+        return f"{MONTH_NAMES[key[1] - 1]} {key[0]}"
+
+    def pct(now, before):
+        return (now - before) / before * 100
+
+    latest_key, _, latest_mean = months[-1]
+    lines = []
+
+    if len(months) > 1:
+        prev_key, _, prev_mean = months[-2]
+        change = pct(latest_mean, prev_mean)
+        direction = "up" if change > 0 else "down" if change < 0 else "level"
+        lines.append(
+            f"{name_of(latest_key)} averaged {latest_mean:.3f} — {direction} "
+            f"{abs(change):.1f}% on {name_of(prev_key)} ({prev_mean:.3f})."
+        )
+    else:
+        lines.append(f"{name_of(latest_key)} averaged {latest_mean:.3f}.")
+
+    if len(months) > 1:
+        ranked = sorted(months, key=lambda m: m[2], reverse=True)
+        rank = next(i for i, m in enumerate(ranked, 1) if m[0] == latest_key)
+        ordinals = ["", "busiest", "2nd busiest", "3rd busiest",
+                    "4th busiest", "5th busiest", "6th busiest"]
+        rank_word = ("quietest" if rank == len(months)
+                     else ordinals[rank] if rank < len(ordinals)
+                     else f"{rank}th busiest")
+        first_key, _, first_mean = months[0]
+        against = pct(latest_mean, first_mean)
+        lines.append(
+            f"That is the {rank_word} of the {len(months)} months shown, and "
+            f"{'+' if against >= 0 else '−'}{abs(against):.1f}% against "
+            f"{name_of(first_key)}, the start of the window."
+        )
+
+    peak_day, peak_value = max(points, key=lambda p: p[1])
+    low_day, low_value = min(points, key=lambda p: p[1])
+    lines.append(
+        f"The busiest single day was {day_label(peak_day)} (the 1.00 that sets "
+        f"the scale) and the quietest was {day_label(low_day)} at "
+        f"{low_value:.3f} — a spread of "
+        f"{abs(pct(peak_value, low_value)):.0f}% between the two."
+    )
+
+    return lines
+
+def write_highlights(filename, rows, window_start, window_end, agg):
+    os.makedirs(args.out_dir, exist_ok=True)
+    path = os.path.join(args.out_dir, filename)
+    generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("Key highlights — Cloudflare Radar AI bot traffic, worldwide\n")
+        f.write(f"Window: {window_start} to {window_end} ({agg}, MIN0_MAX normalized, "
+                f"single request)\n")
+        f.write(f"Generated: {generated}\n")
+        f.write("\n")
+        for i, line in enumerate(build_highlights(rows), 1):
+            f.write(f"{i}. {line}\n")
+        f.write("\n")
+        f.write("Values are indexed so the busiest day in this window reads 1.000.\n")
+        f.write("They are comparable to each other and to nothing outside this file.\n")
+
+    print(f"Saved: {path}")
+    return path
+
 def dated_name(start_date, end_date):
     return (
         f"cloudflare_radar_ai_bots_worldwide_daily_"
@@ -235,8 +326,10 @@ else:
 # overwrite it -- doing so would have the page cite metadata for data it is not
 # showing.
 if args.start:
-    print("Backfill run: leaving radar_meta.json alone (it describes the rolling window).")
+    print("Backfill run: leaving radar_meta.json and key_highlights.txt alone "
+          "(they describe the rolling window).")
 else:
+    write_highlights("key_highlights.txt", rows, window_start, window_end, args.agg)
     meta_path = os.path.join(args.out_dir, "radar_meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(
