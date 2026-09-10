@@ -59,6 +59,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No new or changed CSV; nothing to commit."
           else
-            git commit -m "Update Cloudflare Radar AI-bot data (monthly archive + rolling window)"
+            git commit -m "Update Cloudflare Radar AI-bot rolling window"
             git push
           fi
