@@ -31,10 +31,12 @@ def parse_date(value):
         raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
 
 parser = argparse.ArgumentParser(
-    description="Fetch Cloudflare Radar worldwide AI-bot daily timeseries as CSV. "
-    "With no arguments it writes two files: an immutable archive CSV for the "
-    "calendar month that just ended, and a rolling window CSV covering the last "
-    "N months, overwritten each run. That is what the monthly GitHub Actions run does.",
+    description="Fetch the Cloudflare Radar worldwide AI-bot timeseries as CSV. "
+    "With no arguments it writes two files, each from a single API request: a "
+    "daily archive CSV for the calendar month that just ended, and a weekly "
+    "rolling-window CSV covering the last N months, overwritten each run. The "
+    "API normalizes per response, so the two files are NOT comparable to each "
+    "other. That is what the monthly GitHub Actions run does.",
 )
 parser.add_argument("--start", type=parse_date,
                     help="first day to fetch, YYYY-MM-DD; use with --end for a one-off "
@@ -43,6 +45,9 @@ parser.add_argument("--end", type=parse_date,
                     help="last day to fetch, YYYY-MM-DD")
 parser.add_argument("--rolling-months", type=int, default=6, metavar="N",
                     help="how many trailing months the rolling file covers (default: 6)")
+parser.add_argument("--agg", default="1d", choices=["15m", "1h", "1d", "1w"],
+                    help="aggregation interval for a --start/--end backfill (default: 1d). "
+                         "The API rejects intervals that are too fine for the range.")
 parser.add_argument("--out-dir", default=".",
                     help="directory to write the CSVs into (default: the current directory)")
 args = parser.parse_args()
@@ -52,9 +57,9 @@ if bool(args.start) != bool(args.end):
 if args.rolling_months < 1:
     sys.exit(f"--rolling-months must be at least 1, got {args.rolling_months}")
 
-def request(start_date, end_date, fmt):
+def request(start_date, end_date, fmt, agg):
     params = {
-        "aggInterval": "1d",
+        "aggInterval": agg,
         "dateStart": f"{start_date.isoformat()}T00:00:00Z",
         "dateEnd": f"{end_date.isoformat()}T23:59:59Z",
         "format": fmt,
@@ -82,21 +87,22 @@ def request(start_date, end_date, fmt):
     except Exception as e:
         sys.exit(f"Request failed for {start_date} to {end_date}: {e}")
 
-def fetch_range(start_date, end_date):
-    rows = list(csv.reader(request(start_date, end_date, "csv").splitlines()))
+def fetch_series(start_date, end_date, agg):
+    print(f"Fetching {start_date} to {end_date} at {agg} in a single request...")
+    rows = list(csv.reader(request(start_date, end_date, "csv", agg).splitlines()))
     if not rows:
         return [], []
 
     return rows[0], rows[1:]
 
-def fetch_meta(start_date, end_date):
+def fetch_meta(start_date, end_date, agg):
     """The API's own description of what the numbers mean.
 
-    Radar min-max normalizes per response, so the scale is a property of the
-    request, not of the world. Recording it next to the data keeps anything
-    reading the CSV from inventing a unit.
+    Radar normalizes per response, so the scale is a property of the request,
+    not of the world. Recording it next to the data keeps anything reading the
+    CSV from inventing a unit.
     """
-    payload = json.loads(request(start_date, end_date, "json"))
+    payload = json.loads(request(start_date, end_date, "json", agg))
     meta = payload.get("result", {}).get("meta", {})
     return {
         "normalization": meta.get("normalization"),
@@ -104,9 +110,6 @@ def fetch_meta(start_date, end_date):
         "dateRange": meta.get("dateRange"),
         "confidenceInfo": meta.get("confidenceInfo"),
         "units": meta.get("units"),
-        "window_start": start_date.isoformat(),
-        "window_end": end_date.isoformat(),
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
 def write_csv(filename, header, rows):
@@ -132,6 +135,9 @@ def dated_name(start_date, end_date):
         f"{start_date.isoformat()}_to_{end_date.isoformat()}.csv"
     )
 
+ROLLING_AGG = "1w"
+ARCHIVE_AGG = "1d"
+
 if args.start:
     if args.start > args.end:
         sys.exit(f"--start ({args.start}) is after --end ({args.end})")
@@ -142,36 +148,58 @@ else:
     archive_start, window_end = previous_month(date.today())
     window_start = shift_months(archive_start, -(args.rolling_months - 1))
 
-# One request for the whole window, never one per month. Radar min-max
-# normalizes each response independently, so values from separate requests are
-# on different scales and must not be concatenated or compared:
-# https://developers.cloudflare.com/radar/concepts/normalization/
-print(f"Fetching {window_start} to {window_end} in a single request...")
-header, all_rows = fetch_range(window_start, window_end)
-print()
-
+# Every file is ONE request. Radar normalizes each response independently, so
+# rows from separate requests sit on different scales and must never be
+# concatenated or compared: https://developers.cloudflare.com/radar/concepts/normalization/
+# That rules out the old month-at-a-time chunking. It also caps resolution --
+# the API rejects 1d over a multi-month range ("aggregation interval is too low
+# for date range") -- so the rolling window is weekly and the single-month
+# archive keeps daily detail. The two files are each internally comparable and
+# are NOT comparable to each other.
 if args.start:
-    written = [write_csv(dated_name(window_start, window_end), header, all_rows)]
+    header, rows = fetch_series(window_start, window_end, args.agg)
+    print()
+    written = [write_csv(dated_name(window_start, window_end), header, rows)]
+    meta_windows = {"backfill": {"start": window_start.isoformat(),
+                                 "end": window_end.isoformat(),
+                                 "aggInterval": args.agg,
+                                 **fetch_meta(window_start, window_end, args.agg)}}
 else:
-    # The archive month is a slice of the same response, so it shares the
-    # window's normalization basis rather than getting one of its own.
-    prefix = archive_start.isoformat()[:7]
-    archive_rows = [row for row in all_rows if row and row[0].startswith(prefix)]
+    archive_header, archive_rows = fetch_series(archive_start, window_end, ARCHIVE_AGG)
+    rolling_header, rolling_rows = fetch_series(window_start, window_end, ROLLING_AGG)
+    print()
     written = [
-        write_csv(dated_name(archive_start, window_end), header, archive_rows),
+        write_csv(dated_name(archive_start, window_end), archive_header, archive_rows),
         write_csv(
-            f"cloudflare_radar_ai_bots_worldwide_daily_last_{args.rolling_months}_months.csv",
-            header,
-            all_rows,
+            f"cloudflare_radar_ai_bots_worldwide_weekly_last_{args.rolling_months}_months.csv",
+            rolling_header,
+            rolling_rows,
         ),
     ]
+    meta_windows = {
+        "archive_month": {"start": archive_start.isoformat(),
+                          "end": window_end.isoformat(),
+                          "aggInterval": ARCHIVE_AGG,
+                          **fetch_meta(archive_start, window_end, ARCHIVE_AGG)},
+        "rolling_window": {"start": window_start.isoformat(),
+                           "end": window_end.isoformat(),
+                           "aggInterval": ROLLING_AGG,
+                           **fetch_meta(window_start, window_end, ROLLING_AGG)},
+    }
 
-meta = fetch_meta(window_start, window_end)
 meta_path = os.path.join(args.out_dir, "radar_meta.json")
 with open(meta_path, "w", encoding="utf-8") as f:
-    json.dump(meta, f, indent=2, sort_keys=True)
+    json.dump(
+        {
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "note": "Each series is normalized independently by the API. "
+                    "Values from different series are not comparable.",
+            "series": meta_windows,
+        },
+        f, indent=2, sort_keys=True,
+    )
     f.write("\n")
-print(f"Saved: {meta_path}  (normalization: {meta['normalization']})")
+print(f"Saved: {meta_path}")
 
 print()
 print(f"Window covered: {window_start} to {window_end}")
