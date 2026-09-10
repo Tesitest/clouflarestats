@@ -230,33 +230,38 @@ else:
         ),
     ]
 
-meta_windows = {
-    "window": {
-        "start": window_start.isoformat(),
-        "end": window_end.isoformat(),
-        "aggInterval": args.agg,
-        "series_count": len(spans),
-        "comparable_across_months": True,
-        **fetch_meta(spans, args.agg),
-    }
-}
-
-meta_path = os.path.join(args.out_dir, "radar_meta.json")
-with open(meta_path, "w", encoding="utf-8") as f:
-    json.dump(
-        {
-            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "note": "All months were fetched as parallel series in a single "
-                    "request, so they share one MIN0_MAX maximum and are "
-                    "comparable to each other. Values from a DIFFERENT run or "
-                    "file are on a different scale and are not comparable to "
-                    "these.",
-            "series": meta_windows,
-        },
-        f, indent=2, sort_keys=True,
-    )
-    f.write("\n")
-print(f"Saved: {meta_path}")
+# radar_meta.json describes the rolling window that the published page charts.
+# A one-off backfill is a different window on a different scale, so it must not
+# overwrite it -- doing so would have the page cite metadata for data it is not
+# showing.
+if args.start:
+    print("Backfill run: leaving radar_meta.json alone (it describes the rolling window).")
+else:
+    meta_path = os.path.join(args.out_dir, "radar_meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "note": "All months were fetched as parallel series in a single "
+                        "request, so they share one MIN0_MAX maximum and are "
+                        "comparable to each other. Values from a DIFFERENT run or "
+                        "file are on a different scale and are not comparable to "
+                        "these.",
+                "series": {
+                    "window": {
+                        "start": window_start.isoformat(),
+                        "end": window_end.isoformat(),
+                        "aggInterval": args.agg,
+                        "series_count": len(spans),
+                        "comparable_across_months": True,
+                        **fetch_meta(spans, args.agg),
+                    }
+                },
+            },
+            f, indent=2, sort_keys=True,
+        )
+        f.write("\n")
+    print(f"Saved: {meta_path}")
 
 print()
 print(f"Window covered: {window_start} to {window_end}")
