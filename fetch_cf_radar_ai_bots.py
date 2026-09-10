@@ -34,14 +34,14 @@ parser = argparse.ArgumentParser(
     description="Fetch the Cloudflare Radar worldwide AI-bot timeseries as CSV. "
     "The window is requested as one series per month in a single API call, so "
     "every month shares one normalization maximum and the months can be "
-    "compared to each other. With no arguments it writes a daily archive CSV "
-    "for the calendar month that just ended plus a daily rolling-window CSV "
-    "covering the last N months, both cut from that one response. That is what "
-    "the monthly GitHub Actions run does.",
+    "compared to each other. With no arguments it writes one daily "
+    "rolling-window CSV covering the last N months, plus the highlights and "
+    "metadata that describe it. That is what the monthly GitHub Actions run "
+    "does. Pass --start/--end for a one-off dated export of a specific range.",
 )
 parser.add_argument("--start", type=parse_date,
                     help="first day to fetch, YYYY-MM-DD; use with --end for a one-off "
-                         "backfill, which writes only a dated archive file")
+                         "export, which writes a single dated CSV for that range")
 parser.add_argument("--end", type=parse_date,
                     help="last day to fetch, YYYY-MM-DD")
 parser.add_argument("--rolling-months", type=int, default=6, metavar="N",
@@ -286,8 +286,8 @@ if args.start:
         sys.exit(f"--start ({args.start}) is after --end ({args.end})")
     window_start, window_end = args.start, args.end
 else:
-    archive_start, window_end = previous_month(date.today())
-    window_start = shift_months(archive_start, -(args.rolling_months - 1))
+    last_month_start, window_end = previous_month(date.today())
+    window_start = shift_months(last_month_start, -(args.rolling_months - 1))
 
 # The whole window arrives in ONE response, as parallel equal-length series.
 # Three constraints force that shape:
@@ -310,10 +310,13 @@ rows = [[ts, value] for ts, value in points if ts[:10] >= cutoff]
 if args.start:
     written = [write_csv(dated_name(window_start, window_end), HEADER, rows)]
 else:
-    prefix = archive_start.isoformat()[:7]
-    archive_rows = [r for r in rows if r[0].startswith(prefix)]
+    # Only the rolling window. A per-month archive file used to be written
+    # here too, but it was a slice of this same response: the rows were
+    # already in the rolling file, and each month's copy was pinned to
+    # whichever window happened to produce it, so a shelf of them could not
+    # be read as one series. An explicit --start/--end backfill still writes
+    # a dated file, because that is someone asking for a specific export.
     written = [
-        write_csv(dated_name(archive_start, window_end), HEADER, archive_rows),
         write_csv(
             f"cloudflare_radar_ai_bots_worldwide_daily_last_{args.rolling_months}_months.csv",
             HEADER,
