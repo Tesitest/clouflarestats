@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI bot traffic — Cloudflare Radar</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-block: 40px;
+    padding-inline: 20px;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+
+  header { margin-bottom: 26px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); margin: 0; max-width: 64ch; }
+  .stamp { color: var(--text-muted); margin: 10px 0 0; font-size: 13px; }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+
+  .hero-label { color: var(--text-secondary); font-size: 13px; margin: 0 0 2px; }
+  .hero { font-size: 48px; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; margin: 0; }
+  .hero-note { color: var(--text-secondary); margin: 6px 0 0; }
+
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .axis-note { color: var(--text-muted); font-size: 12px; margin: 0; }
+
+  .chart-shell { position: relative; }
+  svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  svg:focus-visible { outline: 2px solid var(--series-1); outline-offset: 3px; border-radius: 4px; }
+  .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .endlabel { fill: var(--text-secondary); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font-size: 12px; white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12); transform: translate(-50%, -100%);
+  }
+  .tip b { font-variant-numeric: tabular-nums; }
+  .tip .d { color: var(--text-secondary); display: block; }
+
+  h3 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+  ul.highlights { margin: 0; padding-left: 20px; }
+  ul.highlights li { margin-bottom: 9px; }
+  ul.highlights li:last-child { margin-bottom: 0; }
+  ul.highlights b { font-variant-numeric: tabular-nums; }
+
+  details { margin-top: 2px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+  .tablewrap { overflow-x: auto; max-height: 360px; overflow-y: auto; margin-top: 14px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--gridline); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+  td.num, th.num { text-align: right; padding-right: 0; }
+
+  .note { color: var(--text-secondary); font-size: 13px; margin: 0; }
+  .note + .note { margin-top: 8px; }
+  footer { color: var(--text-muted); font-size: 13px; }
+  a { color: var(--series-1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>AI bot traffic, worldwide</h1>
+    <p class="sub">
+      Daily volume of HTTP requests from AI bots over a rolling six months,
+      indexed so the busiest day in the window reads 1.00. Source: Cloudflare Radar.
+    </p>
+    <p class="stamp" id="stamp">Loading data…</p>
+  </header>
+
+  <div id="content" hidden>
+    <div class="card">
+      <p class="hero-label" id="hero-label"></p>
+      <p class="hero" id="hero"></p>
+      <p class="hero-note" id="hero-note"></p>
+    </div>
+
+    <div class="card">
+      <div class="chart-head">
+        <h2 id="chart-title"></h2>
+        <p class="axis-note">Index: 1.00 = busiest day in the window.</p>
+      </div>
+      <div class="chart-shell">
+        <svg id="chart" viewBox="0 0 820 320" role="img" tabindex="0"
+             aria-label="Line chart of daily AI bot request volume over the last six months, indexed to the busiest day. Full values are in the data table below."></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Key highlights</h3>
+      <ul class="highlights" id="highlights"></ul>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Data table</summary>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Date</th><th class="num">Index</th><th class="num">vs peak day</th></tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h3>Reading these numbers</h3>
+      <p class="note" id="meta-note"></p>
+      <p class="note">
+        Radar never returns absolute request counts — it normalizes every
+        response with <code>MIN0_MAX</code>, which divides each value by the
+        largest value in that response. Ratios within one file are therefore
+        real (0.80 is twice 0.40), but a value only means something next to the
+        other values in the <em>same</em> file. Every day charted here came back
+        in a single API call, so all six months share one maximum and can be
+        compared to each other. Figures from a different run, or from the
+        separate monthly archive files, sit on a different scale. See
+        <a href="https://developers.cloudflare.com/radar/concepts/normalization/">Radar's normalization notes</a>.
+      </p>
+    </div>
+  </div>
+
+  <footer id="footer" hidden>
+    <p>
+      Rebuilt automatically on the 1st of each month by
+      <a href="https://github.com/Tesitest/clouflarestats/actions">GitHub Actions</a>.
+      <a id="csvlink" href="#">Download the CSV</a> ·
+      <a id="metalink" href="#">API metadata</a> ·
+      <a href="https://github.com/Tesitest/clouflarestats">Repository</a>
+    </p>
+  </footer>
+</div>
+
+<script>
+const CSV  = "cloudflare_radar_ai_bots_worldwide_daily_last_6_months.csv";
+const META = "radar_meta.json";
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+const fmtIdx = v => v.toFixed(3);
+const fmtRel = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + "%";
+const fmtDay = d => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()].slice(0,3)} ${d.getUTCFullYear()}`;
+const fmtShort = d => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()].slice(0,3)}`;
+const monthName = key => `${MONTHS[+key.split("-")[1] - 1]} ${key.split("-")[0]}`;
+const pctChange = (now, before) => ((now - before) / before) * 100;
+const mean = xs => xs.reduce((s, v) => s + v, 0) / xs.length;
+
+function parseCSV(text) {
+  const out = [];
+  for (const line of text.split(/\r?\n/).slice(1)) {
+    if (!line.trim()) continue;
+    const [ts, raw] = line.split(",");
+    const value = Number(raw);
+    if (!ts || !Number.isFinite(value)) continue;
+    out.push({ date: new Date(ts), value });
+  }
+  out.sort((a, b) => a.date - b.date);
+  return out;
+}
+
+function byMonth(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = `${r.date.getUTCFullYear()}-${String(r.date.getUTCMonth() + 1).padStart(2, "0")}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  return [...map.entries()].map(([key, items]) => ({
+    key, items, mean: mean(items.map(r => r.value)),
+  }));
+}
+
+function niceZeroTicks(hi) {
+  const top = Math.max(1, Math.ceil(hi * 4) / 4);
+  const ticks = [];
+  for (let t = 0; t <= top + 1e-9; t += top / 4) ticks.push(t);
+  return { ticks, top };
+}
+
+/* ---------- highlights: computed from the data, never hardcoded ----------
+   These compare months to each other, which is only legitimate because the
+   whole window is fetched in one API call and therefore shares one
+   normalization maximum. If the pipeline ever goes back to per-month
+   requests, these sentences become fiction. */
+function buildHighlights(rows, months) {
+  const out = [];
+  const latest = months[months.length - 1];
+
+  // 1. The month that was just added, against the one before it.
+  if (months.length > 1) {
+    const prev = months[months.length - 2];
+    const chg = pctChange(latest.mean, prev.mean);
+    const dir = chg > 0 ? "up" : chg < 0 ? "down" : "level";
+    out.push(
+      `<b>${monthName(latest.key)}</b> averaged <b>${fmtIdx(latest.mean)}</b> — ` +
+      `${dir} <b>${Math.abs(chg).toFixed(1)}%</b> on ${monthName(prev.key)} ` +
+      `(${fmtIdx(prev.mean)}).`
+    );
+  } else {
+    out.push(`<b>${monthName(latest.key)}</b> averaged <b>${fmtIdx(latest.mean)}</b>.`);
+  }
+
+  // 2. Where that month lands across the whole window.
+  if (months.length > 1) {
+    const ranked = [...months].sort((a, b) => b.mean - a.mean);
+    const rank = ranked.findIndex(m => m.key === latest.key) + 1;
+    const ordinals = ["", "busiest", "2nd busiest", "3rd busiest", "4th busiest", "5th busiest", "6th busiest"];
+    const rankWord = rank === months.length ? "quietest" : (ordinals[rank] || `${rank}th busiest`);
+    const first = months[0];
+    out.push(
+      `That is the <b>${rankWord}</b> of the ${months.length} months shown, and ` +
+      `<b>${fmtRel(pctChange(latest.mean, first.mean))}</b> against ` +
+      `${monthName(first.key)}, the start of the window.`
+    );
+  }
+
+  // 3. The extremes, which set the scale the rest of the page is read against.
+  const peak = rows.reduce((a, b) => (b.value > a.value ? b : a));
+  const trough = rows.reduce((a, b) => (b.value < a.value ? b : a));
+  out.push(
+    `The busiest single day was <b>${fmtDay(peak.date)}</b> (the 1.00 that sets ` +
+    `the scale) and the quietest was <b>${fmtDay(trough.date)}</b> at ` +
+    `<b>${fmtIdx(trough.value)}</b> — a spread of ` +
+    `<b>${Math.abs(pctChange(peak.value, trough.value)).toFixed(0)}%</b> between the two.`
+  );
+
+  return out;
+}
+
+/* ---------- chart ---------- */
+function drawChart(rows) {
+  const svg = document.getElementById("chart");
+  const tip = document.getElementById("tip");
+  const NS = "http://www.w3.org/2000/svg";
+  const W = 820, H = 320, M = { t: 18, r: 74, b: 34, l: 46 };
+  const pw = W - M.l - M.r, ph = H - M.t - M.b;
+
+  // MIN0_MAX means zero is a real quantity (no requests), so the axis starts there.
+  const { ticks, top } = niceZeroTicks(Math.max(...rows.map(r => r.value)));
+  const t0 = rows[0].date.getTime(), t1 = rows[rows.length - 1].date.getTime();
+  const x = d => M.l + ((d.getTime() - t0) / (t1 - t0)) * pw;
+  const y = v => M.t + ph - (v / top) * ph;
+
+  const el = (name, attrs) => {
+    const n = document.createElementNS(NS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  };
+  const frag = document.createDocumentFragment();
+
+  for (const t of ticks) {
+    frag.appendChild(el("line", {
+      x1: M.l, x2: M.l + pw, y1: y(t), y2: y(t),
+      stroke: "var(--gridline)", "stroke-width": 1,
+    }));
+    const label = el("text", { x: M.l - 10, y: y(t) + 4, "text-anchor": "end", class: "tick" });
+    label.textContent = t.toFixed(2);
+    frag.appendChild(label);
+  }
+
+  let lastMonth = -1;
+  for (const r of rows) {
+    const m = r.date.getUTCMonth();
+    if (m === lastMonth) continue;
+    lastMonth = m;
+    const label = el("text", { x: x(r.date), y: M.t + ph + 20, "text-anchor": "middle", class: "tick" });
+    label.textContent = MONTHS[m].slice(0, 3);
+    frag.appendChild(label);
+  }
+
+  frag.appendChild(el("line", {
+    x1: M.l, x2: M.l + pw, y1: M.t + ph, y2: M.t + ph,
+    stroke: "var(--axis)", "stroke-width": 1,
+  }));
+
+  const pts = rows.map(r => `${x(r.date).toFixed(2)},${y(r.value).toFixed(2)}`);
+  frag.appendChild(el("path", {
+    d: `M${M.l},${M.t + ph} L${pts.join(" L")} L${M.l + pw},${M.t + ph} Z`,
+    fill: "var(--series-1)", "fill-opacity": 0.10,
+  }));
+  frag.appendChild(el("path", {
+    d: `M${pts.join(" L")}`, fill: "none", stroke: "var(--series-1)",
+    "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+  }));
+
+  const last = rows[rows.length - 1];
+  frag.appendChild(el("circle", {
+    cx: x(last.date), cy: y(last.value), r: 4.5,
+    fill: "var(--series-1)", stroke: "var(--surface-1)", "stroke-width": 2,
+  }));
+  const endLabel = el("text", { x: x(last.date) + 10, y: y(last.value) + 4, class: "endlabel" });
+  endLabel.textContent = fmtIdx(last.value);
+  frag.appendChild(endLabel);
+
+  const crosshair = el("line", { y1: M.t, y2: M.t + ph, stroke: "var(--axis)", "stroke-width": 1, opacity: 0 });
+  const cursor = el("circle", { r: 5, fill: "var(--series-1)", stroke: "var(--surface-1)", "stroke-width": 2, opacity: 0 });
+  frag.appendChild(crosshair);
+  frag.appendChild(cursor);
+  svg.appendChild(frag);
+
+  let active = -1;
+  const show = i => {
+    if (i < 0 || i >= rows.length || i === active) return;
+    active = i;
+    const r = rows[i];
+    const px = x(r.date), py = y(r.value);
+    crosshair.setAttribute("x1", px);
+    crosshair.setAttribute("x2", px);
+    crosshair.setAttribute("opacity", 1);
+    cursor.setAttribute("cx", px);
+    cursor.setAttribute("cy", py);
+    cursor.setAttribute("opacity", 1);
+    tip.innerHTML = `<b>${fmtIdx(r.value)}</b><span class="d">${fmtDay(r.date)}</span>`;
+    tip.style.left = (px / W * 100) + "%";
+    tip.style.top = ((py - 12) / H * 100) + "%";
+    tip.style.opacity = 1;
+  };
+  const hide = () => {
+    active = -1;
+    crosshair.setAttribute("opacity", 0);
+    cursor.setAttribute("opacity", 0);
+    tip.style.opacity = 0;
+  };
+  const nearest = clientX => {
+    const box = svg.getBoundingClientRect();
+    const vx = ((clientX - box.left) / box.width) * W;
+    const frac = Math.max(0, Math.min(1, (vx - M.l) / pw));
+    const target = t0 + frac * (t1 - t0);
+    let best = 0, bestD = Infinity;
+    rows.forEach((r, i) => {
+      const d = Math.abs(r.date.getTime() - target);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+  };
+
+  svg.addEventListener("pointermove", e => show(nearest(e.clientX)));
+  svg.addEventListener("pointerleave", hide);
+  svg.addEventListener("blur", hide);
+  svg.addEventListener("keydown", e => {
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const start = active < 0 ? rows.length - 1 : active;
+      const next = Math.max(0, Math.min(rows.length - 1, start + (e.key === "ArrowRight" ? 1 : -1)));
+      active = -1;
+      show(next);
+    } else if (e.key === "Escape") {
+      hide();
+    }
+  });
+}
+
+/* ---------- boot ---------- */
+Promise.all([
+  fetch(CSV, { cache: "no-store" }).then(r => {
+    if (!r.ok) throw new Error(`${CSV}: ${r.status} ${r.statusText}`);
+    return r.text();
+  }),
+  fetch(META, { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+])
+  .then(([text, meta]) => {
+    const rows = parseCSV(text);
+    if (!rows.length) throw new Error("the CSV parsed to zero rows");
+
+    const months = byMonth(rows);
+    const latest = months[months.length - 1];
+    const prev = months.length > 1 ? months[months.length - 2] : null;
+    const peak = rows.reduce((a, b) => (b.value > a.value ? b : a));
+
+    document.getElementById("stamp").textContent =
+      `${fmtShort(rows[0].date)} – ${fmtDay(rows[rows.length - 1].date)} · ` +
+      `${rows.length} days · rebuilt monthly`;
+
+    document.getElementById("hero-label").textContent = `${monthName(latest.key)} average`;
+    document.getElementById("hero").textContent = fmtIdx(latest.mean);
+    document.getElementById("hero-note").textContent = prev
+      ? `${fmtRel(pctChange(latest.mean, prev.mean))} on ${monthName(prev.key)}.`
+      : `Mean of ${latest.items.length} days.`;
+
+    document.getElementById("chart-title").textContent =
+      `Daily index, ${monthName(months[0].key)} – ${monthName(latest.key)}`;
+
+    document.getElementById("highlights").innerHTML =
+      buildHighlights(rows, months).map(h => `<li>${h}</li>`).join("");
+
+    document.getElementById("tbody").innerHTML = rows
+      .slice()
+      .reverse()
+      .map(r => `<tr><td>${fmtDay(r.date)}</td><td class="num">${fmtIdx(r.value)}</td>` +
+                `<td class="num">${fmtRel(pctChange(r.value, peak.value))}</td></tr>`)
+      .join("");
+
+    const w = meta && meta.series && meta.series.window;
+    document.getElementById("meta-note").textContent = w
+      ? `From the API's own metadata for this snapshot: normalization ` +
+        `${w.normalization}, aggregation ${w.aggInterval}, unit ` +
+        `"${(w.units && w.units[0] && w.units[0].value) || "unknown"}", fetched as ` +
+        `${w.series_count} parallel series in one request` +
+        (meta.fetched_at ? ` on ${meta.fetched_at}.` : ".")
+      : `The API metadata file could not be read, so the normalization for this ` +
+        `snapshot is unconfirmed.`;
+
+    document.getElementById("csvlink").href = CSV;
+    document.getElementById("metalink").href = META;
+    document.getElementById("content").hidden = false;
+    document.getElementById("footer").hidden = false;
+    drawChart(rows);
+  })
+  .catch(err => {
+    document.getElementById("stamp").innerHTML =
+      `Could not load the data — ${err.message}. The files are committed by the ` +
+      `monthly workflow; check the ` +
+      `<a href="https://github.com/Tesitest/clouflarestats/actions">Actions runs</a>.`;
+    document.getElementById("footer").hidden = false;
+  });
+</script>
+</body>
+</html>
