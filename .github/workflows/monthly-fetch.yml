@@ -1,0 +1,57 @@
+name: Monthly AI-bot fetch
+
+on:
+  schedule:
+    # 06:00 UTC on the 1st of every month. GitHub queues scheduled runs on a
+    # best-effort basis, so the actual start time can drift by a while.
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First day to fetch (YYYY-MM-DD). Leave blank for last month."
+        required: false
+      end:
+        description: "Last day to fetch (YYYY-MM-DD). Leave blank for last month."
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monthly-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch Radar data
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Via env, not inline ${{ }}, so the inputs can't be read as shell.
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+        run: |
+          if [ -n "$START" ] && [ -n "$END" ]; then
+            python fetch_cf_radar_ai_bots.py --start "$START" --end "$END"
+          else
+            python fetch_cf_radar_ai_bots.py
+          fi
+
+      - name: Commit the CSV
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add '*.csv'
+          if git diff --staged --quiet; then
+            echo "No new or changed CSV; nothing to commit."
+          else
+            git commit -m "Add Cloudflare Radar AI-bot data for the past month"
+            git push
+          fi

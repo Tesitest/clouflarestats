@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import csv
 import os
 import sys
@@ -12,8 +13,37 @@ if not API_TOKEN:
 
 base_url = "https://api.cloudflare.com/client/v4/radar/ai/bots/timeseries"
 
-START_DATE = date(2026, 1, 1)
-END_DATE = date(2026, 6, 28)
+def previous_month(today):
+    """Full range of the calendar month before `today`, as (first_day, last_day)."""
+    last_day = today.replace(day=1) - timedelta(days=1)
+    return last_day.replace(day=1), last_day
+
+def parse_date(value):
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
+
+default_start, default_end = previous_month(date.today())
+
+parser = argparse.ArgumentParser(
+    description="Fetch Cloudflare Radar worldwide AI-bot daily timeseries as CSV. "
+    "With no arguments it fetches the calendar month that just ended, which is "
+    "what the monthly GitHub Actions run does.",
+)
+parser.add_argument("--start", type=parse_date, default=default_start,
+                    help=f"first day to fetch, YYYY-MM-DD (default: {default_start})")
+parser.add_argument("--end", type=parse_date, default=default_end,
+                    help=f"last day to fetch, YYYY-MM-DD (default: {default_end})")
+parser.add_argument("--out-dir", default=".",
+                    help="directory to write the CSV into (default: the current directory)")
+args = parser.parse_args()
+
+START_DATE = args.start
+END_DATE = args.end
+
+if START_DATE > END_DATE:
+    sys.exit(f"--start ({START_DATE}) is after --end ({END_DATE})")
 
 def month_chunks(start_date, end_date):
     current = start_date
@@ -75,7 +105,17 @@ for chunk_start, chunk_end in month_chunks(START_DATE, END_DATE):
 
     all_rows.extend(chunk_rows)
 
-output_file = "cloudflare_radar_ai_bots_worldwide_daily_2026-01-01_to_2026-06-28.csv"
+# Fail loudly rather than committing an empty file: an empty result means the
+# API answered but had nothing for us, which is never the expected outcome.
+if not all_rows:
+    sys.exit(f"No rows returned for {START_DATE} to {END_DATE}; refusing to write an empty CSV.")
+
+filename = (
+    f"cloudflare_radar_ai_bots_worldwide_daily_"
+    f"{START_DATE.isoformat()}_to_{END_DATE.isoformat()}.csv"
+)
+os.makedirs(args.out_dir, exist_ok=True)
+output_file = os.path.join(args.out_dir, filename)
 
 with open(output_file, "w", encoding="utf-8", newline="") as f:
     writer = csv.writer(f)
