@@ -1,43 +1,47 @@
 {
-  "fetched_at": "2026-09-10T09:36:33+00:00",
-  "note": "Each series is normalized independently by the API. Values from different series are not comparable.",
+  "fetched_at": "2026-09-10T09:43:52+00:00",
+  "note": "All months were fetched as parallel series in a single request, so they share one MIN0_MAX maximum and are comparable to each other. Values from a DIFFERENT run or file are on a different scale and are not comparable to these.",
   "series": {
-    "archive_month": {
+    "window": {
       "aggInterval": "ONE_DAY",
+      "comparable_across_months": true,
       "confidenceInfo": {
         "annotations": [],
         "level": null
       },
       "dateRange": [
         {
+          "endTime": "2026-03-16T00:00:00Z",
+          "startTime": "2026-02-17T00:00:00Z"
+        },
+        {
+          "endTime": "2026-04-13T00:00:00Z",
+          "startTime": "2026-03-17T00:00:00Z"
+        },
+        {
+          "endTime": "2026-05-11T00:00:00Z",
+          "startTime": "2026-04-14T00:00:00Z"
+        },
+        {
+          "endTime": "2026-06-08T00:00:00Z",
+          "startTime": "2026-05-12T00:00:00Z"
+        },
+        {
+          "endTime": "2026-07-06T00:00:00Z",
+          "startTime": "2026-06-09T00:00:00Z"
+        },
+        {
+          "endTime": "2026-08-03T00:00:00Z",
+          "startTime": "2026-07-07T00:00:00Z"
+        },
+        {
           "endTime": "2026-08-31T00:00:00Z",
-          "startTime": "2026-08-01T00:00:00Z"
+          "startTime": "2026-08-04T00:00:00Z"
         }
       ],
       "end": "2026-08-31",
       "normalization": "MIN0_MAX",
-      "start": "2026-08-01",
-      "units": [
-        {
-          "name": "*",
-          "value": "requests"
-        }
-      ]
-    },
-    "rolling_window": {
-      "aggInterval": "ONE_WEEK",
-      "confidenceInfo": {
-        "annotations": [],
-        "level": null
-      },
-      "dateRange": [
-        {
-          "endTime": "2026-08-31T00:00:00Z",
-          "startTime": "2026-02-23T00:00:00Z"
-        }
-      ],
-      "end": "2026-08-31",
-      "normalization": "MIN0_MAX",
+      "series_count": 7,
       "start": "2026-03-01",
       "units": [
         {
