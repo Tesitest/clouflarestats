@@ -96,18 +96,26 @@ def request(spans, fmt, agg):
         span_text = ", ".join(f"{lbl} {s}..{e_}" for lbl, s, e_ in spans)
         sys.exit(f"Request failed for [{span_text}]: {e}")
 
-def month_spans(window_start, window_end):
-    """One (label, first_day, last_day) per calendar month in the window."""
+CHUNK_DAYS = 28
+
+def equal_spans(window_start, window_end, chunk_days=CHUNK_DAYS):
+    """Tile the window with contiguous spans of identical length.
+
+    Radar refuses a multi-series request whose series differ in length
+    ("comparisons must have same duration as main series"), so calendar months
+    cannot be the unit -- they are 28 to 31 days. Fixed-length chunks tile the
+    window instead, walking back from the end; the earliest chunk may reach
+    before window_start, and those extra days are trimmed from the result.
+    """
     spans = []
-    current = window_start
-    while current <= window_end:
-        next_month = shift_months(current.replace(day=1), 1)
-        spans.append((
-            f"m{current.year}_{current.month:02d}",
-            current,
-            min(window_end, next_month - timedelta(days=1)),
-        ))
-        current = next_month
+    end = window_end
+    while end >= window_start:
+        start = end - timedelta(days=chunk_days - 1)
+        spans.append((f"s{len(spans)}", start, end))
+        end = start - timedelta(days=1)
+    spans.reverse()
+    for i, (_, start, end) in enumerate(spans):
+        spans[i] = (f"s{i}", start, end)
     return spans
 
 def fetch_multi(spans, agg):
@@ -117,7 +125,8 @@ def fetch_multi(spans, agg):
     "<name> values" -- which flatten into one continuous series because they
     were normalized together.
     """
-    print(f"Fetching {len(spans)} month series at {agg} in a single request...")
+    print(f"Fetching {len(spans)} parallel series at {agg} in a single request "
+          f"({spans[0][1]} to {spans[-1][2]})...")
     table = list(csv.reader(request(spans, "csv", agg).splitlines()))
     if not table:
         sys.exit("Empty response from the API.")
@@ -135,8 +144,9 @@ def fetch_multi(spans, agg):
             if ts and value:
                 points.append((ts, value))
 
-    points.sort(key=lambda p: p[0])
-    return points
+    # Chunk boundaries can repeat a timestamp; keep one row per instant.
+    deduped = dict(points)
+    return sorted(deduped.items())
 
 def fetch_meta(spans, agg):
     """The API's own description of what the numbers mean.
@@ -188,20 +198,24 @@ else:
     archive_start, window_end = previous_month(date.today())
     window_start = shift_months(archive_start, -(args.rolling_months - 1))
 
-# The whole window arrives in ONE response, as one series per month. Two
-# constraints force that shape:
+# The whole window arrives in ONE response, as parallel equal-length series.
+# Three constraints force that shape:
 #   * Radar normalizes per response, so values from separate requests sit on
 #     different scales and can never be compared. Separate monthly requests --
 #     what this script used to do -- gave every month its own maximum of 1.0.
 #   * A single series covering the whole window is rejected at 1d resolution
 #     ("aggregation interval is too low for date range").
-# Asking for the months as parallel series in one request satisfies both: each
-# series is short enough for daily data, and one response means one maximum.
-spans = month_spans(window_start, window_end)
+#   * Series in one request must all be the same length ("comparisons must have
+#     same duration as main series"), which rules out calendar months.
+# Equal-length chunks in one request satisfy all three: each is short enough
+# for daily data, and one response means one maximum for every day in it.
+spans = equal_spans(window_start, window_end)
 points = fetch_multi(spans, args.agg)
 print()
 
-rows = [[ts, value] for ts, value in points]
+# The earliest chunk can reach before the window; keep only what was asked for.
+cutoff = window_start.isoformat()
+rows = [[ts, value] for ts, value in points if ts[:10] >= cutoff]
 if args.start:
     written = [write_csv(dated_name(window_start, window_end), HEADER, rows)]
 else:
