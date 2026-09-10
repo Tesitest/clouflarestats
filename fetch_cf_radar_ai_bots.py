@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import json
 import os
 import sys
 import urllib.parse
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 if not API_TOKEN:
@@ -51,24 +52,12 @@ if bool(args.start) != bool(args.end):
 if args.rolling_months < 1:
     sys.exit(f"--rolling-months must be at least 1, got {args.rolling_months}")
 
-def month_chunks(start_date, end_date):
-    current = start_date
-    while current <= end_date:
-        if current.month == 12:
-            next_month = date(current.year + 1, 1, 1)
-        else:
-            next_month = date(current.year, current.month + 1, 1)
-
-        chunk_end = min(end_date, next_month - timedelta(days=1))
-        yield current, chunk_end
-        current = chunk_end + timedelta(days=1)
-
-def fetch_chunk(chunk_start, chunk_end):
+def request(start_date, end_date, fmt):
     params = {
         "aggInterval": "1d",
-        "dateStart": f"{chunk_start.isoformat()}T00:00:00Z",
-        "dateEnd": f"{chunk_end.isoformat()}T23:59:59Z",
-        "format": "csv",
+        "dateStart": f"{start_date.isoformat()}T00:00:00Z",
+        "dateEnd": f"{end_date.isoformat()}T23:59:59Z",
+        "format": fmt,
         "name": "ai_bots_worldwide",
     }
 
@@ -78,26 +67,47 @@ def fetch_chunk(chunk_start, chunk_end):
         url,
         headers={
             "Authorization": f"Bearer {API_TOKEN}",
-            "Accept": "text/csv",
+            "Accept": "text/csv" if fmt == "csv" else "application/json",
         },
     )
 
     try:
         with urllib.request.urlopen(req, timeout=60) as response:
-            body = response.read().decode("utf-8")
+            return response.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
         sys.exit(
-            f"Cloudflare API error {e.code} for {chunk_start} to {chunk_end}:\n{error_body}"
+            f"Cloudflare API error {e.code} for {start_date} to {end_date}:\n{error_body}"
         )
     except Exception as e:
-        sys.exit(f"Request failed for {chunk_start} to {chunk_end}: {e}")
+        sys.exit(f"Request failed for {start_date} to {end_date}: {e}")
 
-    rows = list(csv.reader(body.splitlines()))
+def fetch_range(start_date, end_date):
+    rows = list(csv.reader(request(start_date, end_date, "csv").splitlines()))
     if not rows:
         return [], []
 
     return rows[0], rows[1:]
+
+def fetch_meta(start_date, end_date):
+    """The API's own description of what the numbers mean.
+
+    Radar min-max normalizes per response, so the scale is a property of the
+    request, not of the world. Recording it next to the data keeps anything
+    reading the CSV from inventing a unit.
+    """
+    payload = json.loads(request(start_date, end_date, "json"))
+    meta = payload.get("result", {}).get("meta", {})
+    return {
+        "normalization": meta.get("normalization"),
+        "aggInterval": meta.get("aggInterval"),
+        "dateRange": meta.get("dateRange"),
+        "confidenceInfo": meta.get("confidenceInfo"),
+        "units": meta.get("units"),
+        "window_start": start_date.isoformat(),
+        "window_end": end_date.isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 def write_csv(filename, header, rows):
     # Fail loudly rather than committing an empty file: an empty result means the
@@ -128,38 +138,40 @@ if args.start:
     window_start, window_end = args.start, args.end
 else:
     # The rolling window ends with the month that just closed, so the archive
-    # month is always the window's final chunk — fetch once, write twice.
+    # month is the tail of the window — one request, two files.
     archive_start, window_end = previous_month(date.today())
     window_start = shift_months(archive_start, -(args.rolling_months - 1))
 
-header = None
-chunks = []
-
-for chunk_start, chunk_end in month_chunks(window_start, window_end):
-    print(f"Fetching {chunk_start} to {chunk_end}...")
-    chunk_header, chunk_rows = fetch_chunk(chunk_start, chunk_end)
-
-    if header is None:
-        header = chunk_header
-
-    chunks.append((chunk_start, chunk_end, chunk_rows))
-
+# One request for the whole window, never one per month. Radar min-max
+# normalizes each response independently, so values from separate requests are
+# on different scales and must not be concatenated or compared:
+# https://developers.cloudflare.com/radar/concepts/normalization/
+print(f"Fetching {window_start} to {window_end} in a single request...")
+header, all_rows = fetch_range(window_start, window_end)
 print()
 
 if args.start:
-    all_rows = [row for _, _, rows in chunks for row in rows]
     written = [write_csv(dated_name(window_start, window_end), header, all_rows)]
 else:
-    archive_start, archive_end, archive_rows = chunks[-1]
-    all_rows = [row for _, _, rows in chunks for row in rows]
+    # The archive month is a slice of the same response, so it shares the
+    # window's normalization basis rather than getting one of its own.
+    prefix = archive_start.isoformat()[:7]
+    archive_rows = [row for row in all_rows if row and row[0].startswith(prefix)]
     written = [
-        write_csv(dated_name(archive_start, archive_end), header, archive_rows),
+        write_csv(dated_name(archive_start, window_end), header, archive_rows),
         write_csv(
             f"cloudflare_radar_ai_bots_worldwide_daily_last_{args.rolling_months}_months.csv",
             header,
             all_rows,
         ),
     ]
+
+meta = fetch_meta(window_start, window_end)
+meta_path = os.path.join(args.out_dir, "radar_meta.json")
+with open(meta_path, "w", encoding="utf-8") as f:
+    json.dump(meta, f, indent=2, sort_keys=True)
+    f.write("\n")
+print(f"Saved: {meta_path}  (normalization: {meta['normalization']})")
 
 print()
 print(f"Window covered: {window_start} to {window_end}")
