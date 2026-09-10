@@ -32,11 +32,12 @@ def parse_date(value):
 
 parser = argparse.ArgumentParser(
     description="Fetch the Cloudflare Radar worldwide AI-bot timeseries as CSV. "
-    "With no arguments it writes two files, each from a single API request: a "
-    "daily archive CSV for the calendar month that just ended, and a weekly "
-    "rolling-window CSV covering the last N months, overwritten each run. The "
-    "API normalizes per response, so the two files are NOT comparable to each "
-    "other. That is what the monthly GitHub Actions run does.",
+    "The window is requested as one series per month in a single API call, so "
+    "every month shares one normalization maximum and the months can be "
+    "compared to each other. With no arguments it writes a daily archive CSV "
+    "for the calendar month that just ended plus a daily rolling-window CSV "
+    "covering the last N months, both cut from that one response. That is what "
+    "the monthly GitHub Actions run does.",
 )
 parser.add_argument("--start", type=parse_date,
                     help="first day to fetch, YYYY-MM-DD; use with --end for a one-off "
@@ -46,8 +47,9 @@ parser.add_argument("--end", type=parse_date,
 parser.add_argument("--rolling-months", type=int, default=6, metavar="N",
                     help="how many trailing months the rolling file covers (default: 6)")
 parser.add_argument("--agg", default="1d", choices=["15m", "1h", "1d", "1w"],
-                    help="aggregation interval for a --start/--end backfill (default: 1d). "
-                         "The API rejects intervals that are too fine for the range.")
+                    help="aggregation interval, applied to every series in the request "
+                         "(default: 1d). The API rejects intervals too fine for a "
+                         "single series' date range.")
 parser.add_argument("--out-dir", default=".",
                     help="directory to write the CSVs into (default: the current directory)")
 args = parser.parse_args()
@@ -57,14 +59,21 @@ if bool(args.start) != bool(args.end):
 if args.rolling_months < 1:
     sys.exit(f"--rolling-months must be at least 1, got {args.rolling_months}")
 
-def request(start_date, end_date, fmt, agg):
-    params = {
-        "aggInterval": agg,
-        "dateStart": f"{start_date.isoformat()}T00:00:00Z",
-        "dateEnd": f"{end_date.isoformat()}T23:59:59Z",
-        "format": fmt,
-        "name": "ai_bots_worldwide",
-    }
+def request(spans, fmt, agg):
+    """One HTTP call carrying one series per (label, start, end) in `spans`.
+
+    Radar builds its series from the *position* of each repeated name /
+    dateStart / dateEnd, and normalizes every series in a response against a
+    single maximum. Asking for all the months at once is therefore the only way
+    to get values that can be compared between them; aggInterval and format are
+    global to the request.
+    https://developers.cloudflare.com/radar/get-started/making-comparisons/
+    """
+    params = [("aggInterval", agg), ("format", fmt)]
+    for label, start_date, end_date in spans:
+        params.append(("name", label))
+        params.append(("dateStart", f"{start_date.isoformat()}T00:00:00Z"))
+        params.append(("dateEnd", f"{end_date.isoformat()}T23:59:59Z"))
 
     url = base_url + "?" + urllib.parse.urlencode(params)
 
@@ -81,28 +90,62 @@ def request(start_date, end_date, fmt, agg):
             return response.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
-        sys.exit(
-            f"Cloudflare API error {e.code} for {start_date} to {end_date}:\n{error_body}"
-        )
+        span_text = ", ".join(f"{lbl} {s}..{e_}" for lbl, s, e_ in spans)
+        sys.exit(f"Cloudflare API error {e.code} for [{span_text}]:\n{error_body}")
     except Exception as e:
-        sys.exit(f"Request failed for {start_date} to {end_date}: {e}")
+        span_text = ", ".join(f"{lbl} {s}..{e_}" for lbl, s, e_ in spans)
+        sys.exit(f"Request failed for [{span_text}]: {e}")
 
-def fetch_series(start_date, end_date, agg):
-    print(f"Fetching {start_date} to {end_date} at {agg} in a single request...")
-    rows = list(csv.reader(request(start_date, end_date, "csv", agg).splitlines()))
-    if not rows:
-        return [], []
+def month_spans(window_start, window_end):
+    """One (label, first_day, last_day) per calendar month in the window."""
+    spans = []
+    current = window_start
+    while current <= window_end:
+        next_month = shift_months(current.replace(day=1), 1)
+        spans.append((
+            f"m{current.year}_{current.month:02d}",
+            current,
+            min(window_end, next_month - timedelta(days=1)),
+        ))
+        current = next_month
+    return spans
 
-    return rows[0], rows[1:]
+def fetch_multi(spans, agg):
+    """Every month in one response, so all of them share one normalization.
 
-def fetch_meta(start_date, end_date, agg):
+    The CSV comes back as paired columns per series -- "<name> timestamps",
+    "<name> values" -- which flatten into one continuous series because they
+    were normalized together.
+    """
+    print(f"Fetching {len(spans)} month series at {agg} in a single request...")
+    table = list(csv.reader(request(spans, "csv", agg).splitlines()))
+    if not table:
+        sys.exit("Empty response from the API.")
+
+    header, body = table[0], table[1:]
+    if len(header) < 2 or len(header) % 2:
+        sys.exit(f"Unexpected CSV shape; header was: {header}")
+
+    points = []
+    for col in range(0, len(header), 2):
+        for row in body:
+            if len(row) <= col + 1:
+                continue
+            ts, value = row[col].strip(), row[col + 1].strip()
+            if ts and value:
+                points.append((ts, value))
+
+    points.sort(key=lambda p: p[0])
+    return points
+
+def fetch_meta(spans, agg):
     """The API's own description of what the numbers mean.
 
     Radar normalizes per response, so the scale is a property of the request,
     not of the world. Recording it next to the data keeps anything reading the
     CSV from inventing a unit.
     """
-    payload = json.loads(request(start_date, end_date, "json", agg))
+    payload = json.loads(request(spans, "json", agg))
     meta = payload.get("result", {}).get("meta", {})
     return {
         "normalization": meta.get("normalization"),
@@ -135,65 +178,65 @@ def dated_name(start_date, end_date):
         f"{start_date.isoformat()}_to_{end_date.isoformat()}.csv"
     )
 
-ROLLING_AGG = "1w"
-ARCHIVE_AGG = "1d"
+HEADER = ["timestamp", "value"]
 
 if args.start:
     if args.start > args.end:
         sys.exit(f"--start ({args.start}) is after --end ({args.end})")
     window_start, window_end = args.start, args.end
 else:
-    # The rolling window ends with the month that just closed, so the archive
-    # month is the tail of the window — one request, two files.
     archive_start, window_end = previous_month(date.today())
     window_start = shift_months(archive_start, -(args.rolling_months - 1))
 
-# Every file is ONE request. Radar normalizes each response independently, so
-# rows from separate requests sit on different scales and must never be
-# concatenated or compared: https://developers.cloudflare.com/radar/concepts/normalization/
-# That rules out the old month-at-a-time chunking. It also caps resolution --
-# the API rejects 1d over a multi-month range ("aggregation interval is too low
-# for date range") -- so the rolling window is weekly and the single-month
-# archive keeps daily detail. The two files are each internally comparable and
-# are NOT comparable to each other.
+# The whole window arrives in ONE response, as one series per month. Two
+# constraints force that shape:
+#   * Radar normalizes per response, so values from separate requests sit on
+#     different scales and can never be compared. Separate monthly requests --
+#     what this script used to do -- gave every month its own maximum of 1.0.
+#   * A single series covering the whole window is rejected at 1d resolution
+#     ("aggregation interval is too low for date range").
+# Asking for the months as parallel series in one request satisfies both: each
+# series is short enough for daily data, and one response means one maximum.
+spans = month_spans(window_start, window_end)
+points = fetch_multi(spans, args.agg)
+print()
+
+rows = [[ts, value] for ts, value in points]
 if args.start:
-    header, rows = fetch_series(window_start, window_end, args.agg)
-    print()
-    written = [write_csv(dated_name(window_start, window_end), header, rows)]
-    meta_windows = {"backfill": {"start": window_start.isoformat(),
-                                 "end": window_end.isoformat(),
-                                 "aggInterval": args.agg,
-                                 **fetch_meta(window_start, window_end, args.agg)}}
+    written = [write_csv(dated_name(window_start, window_end), HEADER, rows)]
 else:
-    archive_header, archive_rows = fetch_series(archive_start, window_end, ARCHIVE_AGG)
-    rolling_header, rolling_rows = fetch_series(window_start, window_end, ROLLING_AGG)
-    print()
+    prefix = archive_start.isoformat()[:7]
+    archive_rows = [r for r in rows if r[0].startswith(prefix)]
     written = [
-        write_csv(dated_name(archive_start, window_end), archive_header, archive_rows),
+        write_csv(dated_name(archive_start, window_end), HEADER, archive_rows),
         write_csv(
-            f"cloudflare_radar_ai_bots_worldwide_weekly_last_{args.rolling_months}_months.csv",
-            rolling_header,
-            rolling_rows,
+            f"cloudflare_radar_ai_bots_worldwide_daily_last_{args.rolling_months}_months.csv",
+            HEADER,
+            rows,
         ),
     ]
-    meta_windows = {
-        "archive_month": {"start": archive_start.isoformat(),
-                          "end": window_end.isoformat(),
-                          "aggInterval": ARCHIVE_AGG,
-                          **fetch_meta(archive_start, window_end, ARCHIVE_AGG)},
-        "rolling_window": {"start": window_start.isoformat(),
-                           "end": window_end.isoformat(),
-                           "aggInterval": ROLLING_AGG,
-                           **fetch_meta(window_start, window_end, ROLLING_AGG)},
+
+meta_windows = {
+    "window": {
+        "start": window_start.isoformat(),
+        "end": window_end.isoformat(),
+        "aggInterval": args.agg,
+        "series_count": len(spans),
+        "comparable_across_months": True,
+        **fetch_meta(spans, args.agg),
     }
+}
 
 meta_path = os.path.join(args.out_dir, "radar_meta.json")
 with open(meta_path, "w", encoding="utf-8") as f:
     json.dump(
         {
             "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "note": "Each series is normalized independently by the API. "
-                    "Values from different series are not comparable.",
+            "note": "All months were fetched as parallel series in a single "
+                    "request, so they share one MIN0_MAX maximum and are "
+                    "comparable to each other. Values from a DIFFERENT run or "
+                    "file are on a different scale and are not comparable to "
+                    "these.",
             "series": meta_windows,
         },
         f, indent=2, sort_keys=True,
