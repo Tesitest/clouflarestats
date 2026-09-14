@@ -2,9 +2,20 @@ name: Monthly AI-bot fetch
 
 on:
   schedule:
-    # 06:00 UTC on the 1st of every month. GitHub queues scheduled runs on a
-    # best-effort basis, so the actual start time can drift by a while.
-    - cron: "0 6 1 * *"
+    # 06:00 UTC on the 3rd of every month -- NOT the 1st. Radar lags behind
+    # real time by more than a day: on 2026-09-14 at 12:16 UTC a request for
+    # 1-13 September came back with 12 rows, because the 13th was not ingested
+    # yet. Running on the 1st would therefore have fetched a month short of
+    # its final day or two and published that as a complete month. The 3rd
+    # gives the ingest ~2.5 days of margin past midnight on the 1st.
+    #
+    # The window itself is unaffected by the date we run: the script derives
+    # it from previous_month(today), so the 3rd of October still fetches all
+    # of September.
+    #
+    # GitHub queues scheduled runs on a best-effort basis, so the actual start
+    # time can drift by a while.
+    - cron: "0 6 3 * *"
   workflow_dispatch:
     inputs:
       start:
