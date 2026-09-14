@@ -1,0 +1,18 @@
+# Every pull request requests a review from @samppagit.
+#
+# GitHub never requests a review from the PR's own author, so this does not
+# nag samppagit about their own PRs -- it only fires for the other org
+# members, which is the point: nobody else's change reaches main unreviewed.
+#
+# A code owner must have write access to be requested. samppagit is repo
+# admin. mollsam has read, which is enough to REVIEW but not to be an owner,
+# so they are deliberately not listed here.
+#
+# This requests the review. It does not BLOCK merging on it -- that needs a
+# branch protection rule or ruleset on main, which is not set up, because
+# requiring a PR on main would stop monthly-fetch.yml pushing its data
+# straight there unless github-actions[bot] is given a bypass.
+#
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @samppagit
