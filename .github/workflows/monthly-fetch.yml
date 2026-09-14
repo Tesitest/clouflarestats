@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: monthly-fetch
@@ -49,7 +50,15 @@ jobs:
             python fetch_cf_radar_ai_bots.py --rolling-months "$ROLLING_MONTHS"
           fi
 
-      - name: Commit the CSVs
+      # Nothing here writes to main. The data lands on a branch and waits for a
+      # human to merge the PR, so every change to the published numbers is a
+      # decision someone made rather than something the cron did overnight.
+      - name: Open a PR with the new data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          ROLLING_MONTHS: ${{ inputs.rolling_months || '6' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -57,8 +66,48 @@ jobs:
           # generated file, and naming a missing path makes git add fail.
           git add -A
           if git diff --staged --quiet; then
-            echo "No new or changed CSV; nothing to commit."
-          else
-            git commit -m "Update Cloudflare Radar AI-bot rolling window"
-            git push
+            echo "No new or changed data; nothing to commit, no PR opened."
+            exit 0
           fi
+
+          if [ -n "$START" ] && [ -n "$END" ]; then
+            summary="one-off export $START to $END"
+            kind="A --start/--end export. It adds a dated CSV and deliberately leaves
+          radar_meta.json, key_highlights.txt and the published page alone, because
+          this window sits on its own normalization scale."
+          else
+            summary="rolling $ROLLING_MONTHS-month refresh"
+            kind="The default run. It rewrites the rolling CSV, key_highlights.txt and
+          radar_meta.json, so merging this changes what the published page shows."
+          fi
+
+          # The run id, not the date: two runs on one day must not collide.
+          branch="radar-data/run-${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          git commit -m "Update Cloudflare Radar AI-bot data ($summary)"
+          git push origin "$branch"
+
+          cat > /tmp/pr-body.md <<EOF
+          Automated by \`monthly-fetch.yml\` — [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
+
+          **Window:** $summary
+
+          $kind
+
+          Radar applies MIN0_MAX normalization per API response, so the values in this
+          PR are on a different scale from the ones currently on main. Expect whole
+          columns to move, not just new rows appended — that is the rescaling, not a
+          traffic spike. See
+          https://developers.cloudflare.com/radar/concepts/normalization/
+
+          If an earlier \`radar-data/\` PR is still open, these two touch the same files:
+          merge the older one first or close it, otherwise the second will conflict.
+          EOF
+
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "Radar AI-bot data: $summary" \
+            --body-file /tmp/pr-body.md
+
+          echo "PR opened. The data is NOT on main until it is merged."
