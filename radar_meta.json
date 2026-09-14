@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-10T10:18:26+00:00",
+  "fetched_at": "2026-09-14T12:58:47+00:00",
   "note": "All months were fetched as parallel series in a single request, so they share one MIN0_MAX maximum and are comparable to each other. Values from a DIFFERENT run or file are on a different scale and are not comparable to these.",
   "series": {
     "window": {
